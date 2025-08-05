@@ -78,55 +78,107 @@ def build_system_prompt():
     """
     return system_message
 
-def get_system_prompt():
-    """Get the system prompt for classification."""
-    return build_system_prompt()
-
-def main():
-    """Simple hello example using OpenAI API."""
+class CustomerServiceClassifier:
+    """A class to handle customer service query classification using OpenAI API."""
     
-    # Get API key from environment
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
-        print("❌ Error: OPENAI_API_KEY not found in environment variables")
-        print("💡 Please add your API key to the .env file:")
-        print("   OPENAI_API_KEY=your_api_key_here")
-        return
-    
-    try:
-        # Create OpenAI client
-        client = OpenAI(api_key=api_key)
+    def __init__(self, api_key=None):
+        """
+        Initialize the classifier with OpenAI API key.
         
-        print("🤖 Hello OpenAI API!")
-        print("=" * 30)
+        Args:
+            api_key (str, optional): OpenAI API key. If not provided, will try to get from environment.
+        """
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it to constructor.")
         
-        user_message = f"""\
-        I want you to delete my profile and all of my user data"""
-
-        messages =  [  
-        {'role':'system', 
-        'content': get_system_prompt()},    
-        {'role':'user', 
-        'content': f"{delimiter}{user_message}{delimiter}"},  
-        ] 
-
-        # Simple chat completion
-        response = client.chat.completions.create(
+        self.client = OpenAI(api_key=self.api_key)
+        self.system_prompt = build_system_prompt()
+    
+    def _build_messages(self, query):
+        """
+        Build the messages array for the OpenAI API call.
+        
+        Args:
+            query (str): The customer service query to classify
+            
+        Returns:
+            list: Messages array for OpenAI API
+        """
+        return [
+            {'role': 'system', 'content': self.system_prompt},
+            {'role': 'user', 'content': f"{delimiter}{query}{delimiter}"}
+        ]
+    
+    def _call_openai_api(self, messages):
+        """
+        Make the API call to OpenAI.
+        
+        Args:
+            messages (list): Messages array for the API call
+            
+        Returns:
+            dict: OpenAI API response
+        """
+        return self.client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
             max_tokens=MAX_TOKENS,
             temperature=TEMPERATURE
         )
+    
+    def classify_query(self, query):
+        """
+        Classify a customer service query.
         
-        # Get the response
-        message = response.choices[0].message.content
-        print(f"AI Response: {message}")
+        Args:
+            query (str): The customer service query to classify
+            
+        Returns:
+            dict: Classification result with 'response' and 'usage' keys
+        """
+        try:
+            messages = self._build_messages(query)
+            response = self._call_openai_api(messages)
+            
+            return {
+                'response': response.choices[0].message.content,
+                'usage': response.usage.dict() if response.usage else None
+            }
+        except Exception as e:
+            return {
+                'response': f"Error: {str(e)}",
+                'usage': None
+            }
+
+def main():
+    """Main function to demonstrate the classification system."""
+    
+    try:
+        # Create classifier instance
+        classifier = CustomerServiceClassifier()
+        
+        print("🤖 Customer Service Classification System")
+        print("=" * 45)
+        
+        # Test query
+        user_message = "I want you to delete my profile and all of my user data"
+        
+        # Classify the query
+        result = classifier.classify_query(user_message)
+        
+        # Display results
+        print(f"Query: {user_message}")
+        print(f"Classification: {result['response']}")
         
         # Show usage info
-        if response.usage:
-            print(f"\n📊 Tokens used: {response.usage.total_tokens}")
+        if result['usage']:
+            print(f"\n📊 Tokens used: {result['usage']['total_tokens']}")
         
+    except ValueError as e:
+        print(f"❌ Configuration error: {e}")
+        print("💡 Please add your API key to the .env file:")
+        print("   OPENAI_API_KEY=your_api_key_here")
     except Exception as e:
         print(f"❌ Error: {e}")
 
