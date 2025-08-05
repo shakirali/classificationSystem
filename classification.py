@@ -110,22 +110,97 @@ class CustomerServiceClassifier:
     
     def _validate_query(self, query):
         """
-        Validate the input query.
+        Validate the input query with comprehensive checks.
         
         Args:
             query (str): The query to validate
             
         Raises:
-            ValueError: If query is invalid
+            ValueError: If query is invalid with specific reason
         """
-        if not query or not isinstance(query, str):
-            raise ValueError("Query must be a non-empty string")
+        # Type validation
+        if not isinstance(query, str):
+            raise ValueError("Query must be a string, got type: " + str(type(query)))
         
-        if len(query.strip()) == 0:
-            raise ValueError("Query cannot be empty or only whitespace")
+        # Null/empty validation
+        if query is None:
+            raise ValueError("Query cannot be None")
         
-        if len(query) > 4000:  # Reasonable limit for API
-            raise ValueError("Query is too long. Maximum 4000 characters allowed.")
+        if len(query) == 0:
+            raise ValueError("Query cannot be empty")
+        
+        # Whitespace validation
+        stripped_query = query.strip()
+        if len(stripped_query) == 0:
+            raise ValueError("Query cannot contain only whitespace characters")
+        
+        # Length validation
+        if len(query) > 4000:
+            raise ValueError(f"Query is too long ({len(query)} characters). Maximum 4000 characters allowed.")
+        
+        if len(stripped_query) < 3:
+            raise ValueError("Query is too short. Please provide more details for accurate classification.")
+        
+        # Content validation
+        self._validate_query_content(stripped_query)
+    
+    def _validate_query_content(self, query):
+        """
+        Validate the content of the query for potential issues.
+        
+        Args:
+            query (str): The stripped query to validate
+            
+        Raises:
+            ValueError: If query content is problematic
+        """
+        # Check for common problematic patterns
+        problematic_patterns = [
+            (r'^\s*[^\w\s]+\s*$', "Query contains only special characters"),
+            (r'^\d+$', "Query contains only numbers"),
+            (r'^[a-zA-Z]{1,2}$', "Query is too short (1-2 letters)"),
+            (r'^\s*[^\w\s]+\s*$', "Query contains only punctuation"),
+        ]
+        
+        import re
+        for pattern, message in problematic_patterns:
+            if re.match(pattern, query):
+                raise ValueError(f"{message}. Please provide a meaningful query.")
+        
+        # Check for excessive repetition
+        words = query.split()
+        if len(words) > 1:
+            word_counts = {}
+            for word in words:
+                word_counts[word.lower()] = word_counts.get(word.lower(), 0) + 1
+            
+            # Check if any word appears more than 50% of the time
+            max_repetition = max(word_counts.values())
+            if max_repetition > len(words) * 0.5:
+                raise ValueError("Query contains excessive word repetition. Please provide a more varied query.")
+        
+        # Check for all caps (potential spam)
+        if query.isupper() and len(query) > 10:
+            raise ValueError("Query is in all caps. Please use normal case for better classification.")
+    
+    def _sanitize_query(self, query):
+        """
+        Sanitize the query for safe processing.
+        
+        Args:
+            query (str): The query to sanitize
+            
+        Returns:
+            str: Sanitized query
+        """
+        # Remove excessive whitespace
+        sanitized = ' '.join(query.split())
+        
+        # Truncate if too long (with safety margin)
+        if len(sanitized) > 3900:  # Leave some buffer
+            sanitized = sanitized[:3900] + "..."
+        
+        return sanitized
     
     def _build_messages(self, query):
         """
@@ -227,12 +302,22 @@ class CustomerServiceClassifier:
             # Validate input
             self._validate_query(query)
             
+            # Sanitize query for processing
+            sanitized_query = self._sanitize_query(query)
+            
             # Build messages and make API call
-            messages = self._build_messages(query)
+            messages = self._build_messages(sanitized_query)
             response = self._call_openai_api(messages)
             
             # Parse and return response
-            return self._parse_response(response)
+            result = self._parse_response(response)
+            
+            # Add validation info to result
+            result['original_query'] = query
+            result['sanitized_query'] = sanitized_query
+            result['validation_passed'] = True
+            
+            return result
             
         except (ValueError, OpenAIError, RuntimeError):
             # Re-raise specific exceptions
@@ -240,9 +325,44 @@ class CustomerServiceClassifier:
         except Exception as e:
             # Catch any other unexpected errors
             raise RuntimeError(f"Unexpected error during classification: {str(e)}")
+    
+    def validate_and_sanitize_query(self, query):
+        """
+        Validate and sanitize a query without making an API call.
+        
+        Args:
+            query (str): The query to validate and sanitize
+            
+        Returns:
+            dict: Validation result with sanitized query and validation info
+            
+        Raises:
+            ValueError: If query is invalid
+        """
+        try:
+            # Validate input
+            self._validate_query(query)
+            
+            # Sanitize query
+            sanitized_query = self._sanitize_query(query)
+            
+            return {
+                'is_valid': True,
+                'original_query': query,
+                'sanitized_query': sanitized_query,
+                'validation_messages': ['Query passed all validation checks']
+            }
+            
+        except ValueError as e:
+            return {
+                'is_valid': False,
+                'original_query': query,
+                'error_message': str(e),
+                'validation_messages': [str(e)]
+            }
 
 def main():
-    """Main function to demonstrate the classification system."""
+    """Main function to demonstrate the classification system with validation."""
     
     try:
         # Create classifier instance
@@ -251,25 +371,46 @@ def main():
         print("🤖 Customer Service Classification System")
         print("=" * 45)
         
-        # Test query
-        user_message = "I want you to delete my profile and all of my user data"
+        # Test queries to demonstrate validation
+        test_queries = [
+            "I want you to delete my profile and all of my user data",  # Valid
+            "   ",  # Invalid: only whitespace
+            "Hi",  # Invalid: too short
+            "HELLO THIS IS A TEST MESSAGE IN ALL CAPS",  # Invalid: all caps
+            "test test test test test test test test test test",  # Invalid: repetition
+            "12345",  # Invalid: only numbers
+            "!!!",  # Invalid: only special characters
+        ]
         
-        # Classify the query
-        result = classifier.classify_query(user_message)
-        
-        # Display results
-        print(f"Query: {user_message}")
-        
-        # Handle different response formats
-        if isinstance(result['response'], dict):
-            print(f"Primary Category: {result['response'].get('primary', 'N/A')}")
-            print(f"Secondary Category: {result['response'].get('secondary', 'N/A')}")
-        else:
-            print(f"Classification: {result['response']}")
-        
-        # Show usage info
-        if result['usage']:
-            print(f"\n📊 Tokens used: {result['usage']['total_tokens']}")
+        for i, query in enumerate(test_queries, 1):
+            print(f"\n--- Test {i}: '{query}' ---")
+            
+            # First validate the query
+            validation_result = classifier.validate_and_sanitize_query(query)
+            
+            if validation_result['is_valid']:
+                print(f"✅ Validation passed")
+                print(f"📝 Sanitized: '{validation_result['sanitized_query']}'")
+                
+                # Proceed with classification
+                try:
+                    result = classifier.classify_query(query)
+                    
+                    # Display results
+                    if isinstance(result['response'], dict):
+                        print(f"🏷️  Primary Category: {result['response'].get('primary', 'N/A')}")
+                        print(f"🏷️  Secondary Category: {result['response'].get('secondary', 'N/A')}")
+                    else:
+                        print(f"🏷️  Classification: {result['response']}")
+                    
+                    # Show usage info
+                    if result['usage']:
+                        print(f"📊 Tokens used: {result['usage']['total_tokens']}")
+                        
+                except (OpenAIError, RuntimeError) as e:
+                    print(f"❌ Classification failed: {e}")
+            else:
+                print(f"❌ Validation failed: {validation_result['error_message']}")
         
     except ValueError as e:
         print(f"❌ Configuration Error: {e}")
