@@ -105,6 +105,9 @@ class CustomerServiceClassifier:
         try:
             self.client = OpenAI(api_key=self.api_key)
             self.system_prompt = build_system_prompt()
+            self.model = MODEL_NAME
+            self.max_tokens = MAX_TOKENS
+            self.temperature = TEMPERATURE
         except Exception as e:
             raise RuntimeError(f"Failed to initialize OpenAI client: {str(e)}")
     
