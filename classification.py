@@ -202,20 +202,140 @@ class CustomerServiceClassifier:
         
         return sanitized
     
-    def _build_messages(self, query):
+    def _build_messages(self, query, include_context=True, max_context_length=1000):
         """
-        Build the messages array for the OpenAI API call.
+        Build the messages array for the OpenAI API call with enhanced features.
         
         Args:
             query (str): The customer service query to classify
+            include_context (bool): Whether to include additional context
+            max_context_length (int): Maximum length for context information
             
         Returns:
             list: Messages array for OpenAI API
         """
-        return [
-            {'role': 'system', 'content': self.system_prompt},
-            {'role': 'user', 'content': f"{delimiter}{query}{delimiter}"}
-        ]
+        messages = []
+        
+        # Add system message
+        system_message = self._build_system_message(include_context, max_context_length)
+        messages.append({'role': 'system', 'content': system_message})
+        
+        # Add user message with proper formatting
+        user_message = self._build_user_message(query)
+        messages.append({'role': 'user', 'content': user_message})
+        
+        return messages
+    
+    def _build_system_message(self, include_context=True, max_context_length=1000):
+        """
+        Build the system message with optional context.
+        
+        Args:
+            include_context (bool): Whether to include additional context
+            max_context_length (int): Maximum length for context information
+            
+        Returns:
+            str: Formatted system message
+        """
+        base_prompt = self.system_prompt
+        
+        if include_context:
+            context = self._get_classification_context()
+            if context and len(context) <= max_context_length:
+                base_prompt += f"\n\nAdditional Context:\n{context}"
+        
+        return base_prompt
+    
+    def _build_user_message(self, query):
+        """
+        Build the user message with proper formatting and delimiters.
+        
+        Args:
+            query (str): The query to format
+            
+        Returns:
+            str: Formatted user message
+        """
+        # Ensure proper delimiter formatting
+        formatted_query = query.strip()
+        
+        # Add delimiters with proper spacing
+        user_message = f"{delimiter}\n{formatted_query}\n{delimiter}"
+        
+        return user_message
+    
+    def _get_classification_context(self):
+        """
+        Get additional context for classification if needed.
+        
+        Returns:
+            str: Additional context information or empty string
+        """
+        # This can be extended to include:
+        # - User history
+        # - Previous classifications
+        # - System status
+        # - Time-based context
+        # - User preferences
+        
+        context_parts = []
+        
+        # Add timestamp context
+        from datetime import datetime
+        current_time = datetime.now()
+        context_parts.append(f"Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Add model information
+        context_parts.append(f"Model: {MODEL_NAME}")
+        
+        # Add category information
+        context_parts.append(f"Available categories: {', '.join(CATEGORIES.keys())}")
+        
+        return "\n".join(context_parts)
+    
+    def _validate_messages(self, messages):
+        """
+        Validate the messages array before sending to API.
+        
+        Args:
+            messages (list): Messages array to validate
+            
+        Raises:
+            ValueError: If messages are invalid
+        """
+        if not isinstance(messages, list):
+            raise ValueError("Messages must be a list")
+        
+        if len(messages) < 2:
+            raise ValueError("Messages must contain at least system and user messages")
+        
+        required_roles = {'system', 'user'}
+        found_roles = set()
+        
+        for i, message in enumerate(messages):
+            if not isinstance(message, dict):
+                raise ValueError(f"Message {i} must be a dictionary")
+            
+            if 'role' not in message or 'content' not in message:
+                raise ValueError(f"Message {i} must contain 'role' and 'content' keys")
+            
+            role = message['role']
+            content = message['content']
+            
+            if role not in ['system', 'user', 'assistant']:
+                raise ValueError(f"Invalid role '{role}' in message {i}")
+            
+            if not isinstance(content, str):
+                raise ValueError(f"Content in message {i} must be a string")
+            
+            if len(content.strip()) == 0:
+                raise ValueError(f"Content in message {i} cannot be empty")
+            
+            found_roles.add(role)
+        
+        if not required_roles.issubset(found_roles):
+            missing = required_roles - found_roles
+            raise ValueError(f"Missing required roles: {missing}")
     
     def _call_openai_api(self, messages):
         """
@@ -228,9 +348,13 @@ class CustomerServiceClassifier:
             dict: OpenAI API response
             
         Raises:
+            ValueError: If messages are invalid
             OpenAIError: If API call fails
             RuntimeError: For other unexpected errors
         """
+        # Validate messages before API call
+        self._validate_messages(messages)
+        
         try:
             return self.client.chat.completions.create(
                 model=MODEL_NAME,
@@ -253,42 +377,232 @@ class CustomerServiceClassifier:
     
     def _parse_response(self, response):
         """
-        Parse and validate the API response.
+        Parse and validate the API response with comprehensive error handling.
         
         Args:
             response: OpenAI API response object
             
         Returns:
-            dict: Parsed response with content and usage
+            dict: Parsed response with structured data and metadata
+            
+        Raises:
+            RuntimeError: If response format is invalid
         """
         try:
+            # Extract basic response data
             content = response.choices[0].message.content
             usage = response.usage.dict() if response.usage else None
+            finish_reason = response.choices[0].finish_reason
             
-            # Try to parse JSON response
-            try:
-                parsed_content = json.loads(content)
-                return {
-                    'response': parsed_content,
-                    'usage': usage,
-                    'raw_response': content
+            # Parse and validate the content
+            parsed_result = self._parse_content(content)
+            
+            # Build comprehensive response
+            result = {
+                'response': parsed_result['parsed_content'],
+                'usage': usage,
+                'raw_response': content,
+                'parsing_info': {
+                    'was_json': parsed_result['was_json'],
+                    'parsing_successful': parsed_result['parsing_successful'],
+                    'parsing_errors': parsed_result['parsing_errors']
+                },
+                'metadata': {
+                    'finish_reason': finish_reason,
+                    'model_used': MODEL_NAME,
+                    'timestamp': self._get_current_timestamp()
                 }
-            except json.JSONDecodeError:
-                # If not JSON, return as string
-                return {
-                    'response': content,
-                    'usage': usage,
-                    'raw_response': content
-                }
+            }
+            
+            return result
+            
         except (AttributeError, IndexError) as e:
             raise RuntimeError(f"Invalid response format from OpenAI: {str(e)}")
     
-    def classify_query(self, query):
+    def _parse_content(self, content):
+        """
+        Parse the content with multiple parsing strategies.
+        
+        Args:
+            content (str): Raw content from API response
+            
+        Returns:
+            dict: Parsing result with parsed content and metadata
+        """
+        parsing_result = {
+            'parsed_content': content,
+            'was_json': False,
+            'parsing_successful': True,
+            'parsing_errors': []
+        }
+        
+        # Strategy 1: Try direct JSON parsing
+        try:
+            parsed_json = json.loads(content)
+            if self._validate_classification_json(parsed_json):
+                parsing_result.update({
+                    'parsed_content': parsed_json,
+                    'was_json': True,
+                    'parsing_successful': True
+                })
+                return parsing_result
+        except json.JSONDecodeError as e:
+            parsing_result['parsing_errors'].append(f"JSON parsing failed: {str(e)}")
+        
+        # Strategy 2: Try to extract JSON from text
+        extracted_json = self._extract_json_from_text(content)
+        if extracted_json:
+            try:
+                parsed_json = json.loads(extracted_json)
+                if self._validate_classification_json(parsed_json):
+                    parsing_result.update({
+                        'parsed_content': parsed_json,
+                        'was_json': True,
+                        'parsing_successful': True
+                    })
+                    return parsing_result
+            except json.JSONDecodeError as e:
+                parsing_result['parsing_errors'].append(f"Extracted JSON parsing failed: {str(e)}")
+        
+        # Strategy 3: Try to parse structured text
+        structured_result = self._parse_structured_text(content)
+        if structured_result:
+            parsing_result.update({
+                'parsed_content': structured_result,
+                'was_json': False,
+                'parsing_successful': True
+            })
+            return parsing_result
+        
+        # Strategy 4: Fallback to raw content
+        parsing_result.update({
+            'parsed_content': content,
+            'was_json': False,
+            'parsing_successful': False,
+            'parsing_errors': ['All parsing strategies failed, returning raw content']
+        })
+        
+        return parsing_result
+    
+    def _validate_classification_json(self, parsed_json):
+        """
+        Validate that the parsed JSON has the expected classification structure.
+        
+        Args:
+            parsed_json (dict): Parsed JSON to validate
+            
+        Returns:
+            bool: True if valid classification format
+        """
+        if not isinstance(parsed_json, dict):
+            return False
+        
+        # Check for required fields
+        required_fields = ['primary', 'secondary']
+        if not all(field in parsed_json for field in required_fields):
+            return False
+        
+        # Validate field types
+        if not isinstance(parsed_json['primary'], str) or not isinstance(parsed_json['secondary'], str):
+            return False
+        
+        # Validate against known categories
+        valid_primary_categories = list(CATEGORIES.keys())
+        if parsed_json['primary'] not in valid_primary_categories:
+            return False
+        
+        # Validate secondary category
+        valid_secondary_categories = CATEGORIES.get(parsed_json['primary'], [])
+        if parsed_json['secondary'] not in valid_secondary_categories:
+            return False
+        
+        return True
+    
+    def _extract_json_from_text(self, text):
+        """
+        Extract JSON from text that might contain additional content.
+        
+        Args:
+            text (str): Text that might contain JSON
+            
+        Returns:
+            str: Extracted JSON string or None
+        """
+        import re
+        
+        # Look for JSON-like patterns
+        json_patterns = [
+            r'\{[^{}]*"primary"[^{}]*"secondary"[^{}]*\}',
+            r'\{[^{}]*"secondary"[^{}]*"primary"[^{}]*\}',
+            r'\{[^{}]*\}',  # Any JSON object
+        ]
+        
+        for pattern in json_patterns:
+            matches = re.findall(pattern, text, re.DOTALL)
+            for match in matches:
+                # Try to clean up the match
+                cleaned = match.strip()
+                if cleaned.startswith('{') and cleaned.endswith('}'):
+                    return cleaned
+        
+        return None
+    
+    def _parse_structured_text(self, text):
+        """
+        Parse structured text that's not JSON but contains classification info.
+        
+        Args:
+            text (str): Text to parse
+            
+        Returns:
+            dict: Parsed classification or None
+        """
+        import re
+        
+        # Look for patterns like "Primary: X, Secondary: Y"
+        patterns = [
+            r'primary[:\s]+([^,\n]+)',
+            r'secondary[:\s]+([^,\n]+)',
+            r'category[:\s]+([^,\n]+)',
+        ]
+        
+        primary_match = None
+        secondary_match = None
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                if 'primary' in pattern.lower():
+                    primary_match = matches[0].strip()
+                elif 'secondary' in pattern.lower():
+                    secondary_match = matches[0].strip()
+        
+        if primary_match and secondary_match:
+            return {
+                'primary': primary_match,
+                'secondary': secondary_match,
+                'parsing_method': 'structured_text'
+            }
+        
+        return None
+    
+    def _get_current_timestamp(self):
+        """
+        Get current timestamp for response metadata.
+        
+        Returns:
+            str: Formatted timestamp
+        """
+        from datetime import datetime
+        return datetime.now().isoformat()
+    
+    def classify_query(self, query, include_context=True):
         """
         Classify a customer service query.
         
         Args:
             query (str): The customer service query to classify
+            include_context (bool): Whether to include additional context in the request
             
         Returns:
             dict: Classification result with 'response', 'usage', and 'raw_response' keys
@@ -306,7 +620,7 @@ class CustomerServiceClassifier:
             sanitized_query = self._sanitize_query(query)
             
             # Build messages and make API call
-            messages = self._build_messages(sanitized_query)
+            messages = self._build_messages(sanitized_query, include_context)
             response = self._call_openai_api(messages)
             
             # Parse and return response
@@ -316,6 +630,7 @@ class CustomerServiceClassifier:
             result['original_query'] = query
             result['sanitized_query'] = sanitized_query
             result['validation_passed'] = True
+            result['context_included'] = include_context
             
             return result
             
@@ -325,6 +640,46 @@ class CustomerServiceClassifier:
         except Exception as e:
             # Catch any other unexpected errors
             raise RuntimeError(f"Unexpected error during classification: {str(e)}")
+    
+    def build_messages_for_query(self, query, include_context=True):
+        """
+        Build messages for a query without making an API call.
+        Useful for debugging and testing.
+        
+        Args:
+            query (str): The query to build messages for
+            include_context (bool): Whether to include additional context
+            
+        Returns:
+            dict: Messages and validation information
+        """
+        try:
+            # Validate and sanitize query
+            self._validate_query(query)
+            sanitized_query = self._sanitize_query(query)
+            
+            # Build messages
+            messages = self._build_messages(sanitized_query, include_context)
+            
+            # Validate messages
+            self._validate_messages(messages)
+            
+            return {
+                'success': True,
+                'original_query': query,
+                'sanitized_query': sanitized_query,
+                'messages': messages,
+                'context_included': include_context,
+                'message_count': len(messages)
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'original_query': query,
+                'error': str(e),
+                'error_type': type(e).__name__
+            }
     
     def validate_and_sanitize_query(self, query):
         """
@@ -396,16 +751,32 @@ def main():
                 try:
                     result = classifier.classify_query(query)
                     
-                    # Display results
+                    # Display results with enhanced parsing info
+                    print(f"🔍 Parsing Info:")
+                    print(f"   JSON Format: {result['parsing_info']['was_json']}")
+                    print(f"   Parsing Successful: {result['parsing_info']['parsing_successful']}")
+                    
+                    if result['parsing_info']['parsing_errors']:
+                        print(f"   Parsing Errors: {', '.join(result['parsing_info']['parsing_errors'])}")
+                    
+                    # Display classification results
                     if isinstance(result['response'], dict):
                         print(f"🏷️  Primary Category: {result['response'].get('primary', 'N/A')}")
                         print(f"🏷️  Secondary Category: {result['response'].get('secondary', 'N/A')}")
+                        if 'parsing_method' in result['response']:
+                            print(f"📝  Parsing Method: {result['response']['parsing_method']}")
                     else:
                         print(f"🏷️  Classification: {result['response']}")
                     
+                    # Show metadata
+                    print(f"📊 Metadata:")
+                    print(f"   Model: {result['metadata']['model_used']}")
+                    print(f"   Finish Reason: {result['metadata']['finish_reason']}")
+                    print(f"   Timestamp: {result['metadata']['timestamp']}")
+                    
                     # Show usage info
                     if result['usage']:
-                        print(f"📊 Tokens used: {result['usage']['total_tokens']}")
+                        print(f"   Tokens Used: {result['usage']['total_tokens']}")
                         
                 except (OpenAIError, RuntimeError) as e:
                     print(f"❌ Classification failed: {e}")
