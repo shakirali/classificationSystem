@@ -716,15 +716,157 @@ class CustomerServiceClassifier:
                 'validation_messages': [str(e)]
             }
 
+class OutputFormatter:
+    """Handles formatted output for the classification system."""
+    
+    # Color codes for terminal output
+    COLORS = {
+        'reset': '\033[0m',
+        'bold': '\033[1m',
+        'red': '\033[91m',
+        'green': '\033[92m',
+        'yellow': '\033[93m',
+        'blue': '\033[94m',
+        'magenta': '\033[95m',
+        'cyan': '\033[96m',
+        'white': '\033[97m',
+        'gray': '\033[90m'
+    }
+    
+    @classmethod
+    def colorize(cls, text, color):
+        """Add color to text if terminal supports it."""
+        try:
+            return f"{cls.COLORS.get(color, '')}{text}{cls.COLORS['reset']}"
+        except:
+            return text
+    
+    @classmethod
+    def print_header(cls, title):
+        """Print a formatted header."""
+        print("\n" + "=" * 60)
+        print(cls.colorize(f"🤖 {title}", 'bold'))
+        print("=" * 60)
+    
+    @classmethod
+    def print_section(cls, title):
+        """Print a section header."""
+        print(f"\n{cls.colorize('─' * 40, 'gray')}")
+        print(cls.colorize(f"📋 {title}", 'cyan'))
+        print(f"{cls.colorize('─' * 40, 'gray')}")
+    
+    @classmethod
+    def print_test_case(cls, test_num, query):
+        """Print a test case header."""
+        print(f"\n{cls.colorize(f'🧪 Test {test_num}', 'yellow')}")
+        print(f"{cls.colorize('Query:', 'gray')} '{query}'")
+    
+    @classmethod
+    def print_validation_result(cls, validation_result):
+        """Print validation results."""
+        if validation_result['is_valid']:
+            print(f"{cls.colorize('✅ Validation Passed', 'green')}")
+            print(f"{cls.colorize('📝 Sanitized:', 'gray')} '{validation_result['sanitized_query']}'")
+        else:
+            print(f"{cls.colorize('❌ Validation Failed', 'red')}")
+            print(f"{cls.colorize('💬 Error:', 'red')} {validation_result['error_message']}")
+    
+    @classmethod
+    def print_classification_result(cls, result):
+        """Print classification results in a structured format."""
+        # Parsing Information
+        cls.print_section("Parsing Information")
+        parsing_info = result['parsing_info']
+        
+        json_status = "✅ JSON" if parsing_info['was_json'] else "📄 Text"
+        success_status = "✅ Successful" if parsing_info['parsing_successful'] else "❌ Failed"
+        
+        print(f"{cls.colorize('Format:', 'gray')} {json_status}")
+        print(f"{cls.colorize('Status:', 'gray')} {success_status}")
+        
+        if parsing_info['parsing_errors']:
+            print(f"{cls.colorize('Errors:', 'red')} {', '.join(parsing_info['parsing_errors'])}")
+        
+        # Classification Results
+        cls.print_section("Classification Results")
+        response = result['response']
+        
+        if isinstance(response, dict):
+            primary = response.get('primary', 'N/A')
+            secondary = response.get('secondary', 'N/A')
+            
+            # Color code based on category
+            primary_color = cls._get_category_color(primary)
+            secondary_color = cls._get_category_color(secondary)
+            
+            print(f"{cls.colorize('🏷️  Primary Category:', 'gray')} {cls.colorize(primary, primary_color)}")
+            print(f"{cls.colorize('🏷️  Secondary Category:', 'gray')} {cls.colorize(secondary, secondary_color)}")
+            
+            if 'parsing_method' in response:
+                print(f"{cls.colorize('📝  Parsing Method:', 'gray')} {response['parsing_method']}")
+        else:
+            print(f"{cls.colorize('🏷️  Classification:', 'gray')} {response}")
+        
+        # Metadata
+        cls.print_section("System Information")
+        metadata = result['metadata']
+        
+        print(f"{cls.colorize('🤖 Model:', 'gray')} {metadata['model_used']}")
+        print(f"{cls.colorize('⏱️  Timestamp:', 'gray')} {metadata['timestamp']}")
+        print(f"{cls.colorize('🏁 Finish Reason:', 'gray')} {metadata['finish_reason']}")
+        
+        # Usage Information
+        if result['usage']:
+            usage = result['usage']
+            print(f"{cls.colorize('📊 Token Usage:', 'gray')}")
+            print(f"   {cls.colorize('Total Tokens:', 'gray')} {usage['total_tokens']}")
+            print(f"   {cls.colorize('Prompt Tokens:', 'gray')} {usage.get('prompt_tokens', 'N/A')}")
+            print(f"   {cls.colorize('Completion Tokens:', 'gray')} {usage.get('completion_tokens', 'N/A')}")
+    
+    @classmethod
+    def print_error(cls, error_type, message, suggestions=None):
+        """Print formatted error messages."""
+        print(f"\n{cls.colorize('❌ ' + error_type, 'red')}")
+        print(f"{cls.colorize('💬 Message:', 'red')} {message}")
+        
+        if suggestions:
+            print(f"{cls.colorize('💡 Suggestions:', 'yellow')}")
+            for suggestion in suggestions:
+                print(f"   • {suggestion}")
+    
+    @classmethod
+    def print_summary(cls, results):
+        """Print a summary of all test results."""
+        cls.print_section("Test Summary")
+        
+        total_tests = len(results)
+        successful_validations = sum(1 for r in results if r.get('validation_passed', False))
+        successful_classifications = sum(1 for r in results if r.get('classification_successful', False))
+        
+        print(f"{cls.colorize('📊 Total Tests:', 'gray')} {total_tests}")
+        print(f"{cls.colorize('✅ Valid Queries:', 'green')} {successful_validations}")
+        print(f"{cls.colorize('🤖 Successful Classifications:', 'green')} {successful_classifications}")
+        print(f"{cls.colorize('❌ Failed Tests:', 'red')} {total_tests - successful_classifications}")
+    
+    @classmethod
+    def _get_category_color(cls, category):
+        """Get color for different categories."""
+        category_colors = {
+            'Billing': 'red',
+            'Technical Support': 'blue',
+            'Account Management': 'green',
+            'General Inquiry': 'magenta'
+        }
+        return category_colors.get(category, 'white')
+
 def main():
-    """Main function to demonstrate the classification system with validation."""
+    """Main function to demonstrate the classification system with enhanced formatting."""
     
     try:
         # Create classifier instance
         classifier = CustomerServiceClassifier()
         
-        print("🤖 Customer Service Classification System")
-        print("=" * 45)
+        OutputFormatter.print_header("Customer Service Classification System")
         
         # Test queries to demonstrate validation
         test_queries = [
@@ -737,71 +879,85 @@ def main():
             "!!!",  # Invalid: only special characters
         ]
         
+        results = []
+        
         for i, query in enumerate(test_queries, 1):
-            print(f"\n--- Test {i}: '{query}' ---")
+            OutputFormatter.print_test_case(i, query)
             
             # First validate the query
             validation_result = classifier.validate_and_sanitize_query(query)
+            OutputFormatter.print_validation_result(validation_result)
+            
+            result_info = {
+                'test_number': i,
+                'query': query,
+                'validation_passed': validation_result['is_valid']
+            }
             
             if validation_result['is_valid']:
-                print(f"✅ Validation passed")
-                print(f"📝 Sanitized: '{validation_result['sanitized_query']}'")
-                
                 # Proceed with classification
                 try:
                     result = classifier.classify_query(query)
-                    
-                    # Display results with enhanced parsing info
-                    print(f"🔍 Parsing Info:")
-                    print(f"   JSON Format: {result['parsing_info']['was_json']}")
-                    print(f"   Parsing Successful: {result['parsing_info']['parsing_successful']}")
-                    
-                    if result['parsing_info']['parsing_errors']:
-                        print(f"   Parsing Errors: {', '.join(result['parsing_info']['parsing_errors'])}")
-                    
-                    # Display classification results
-                    if isinstance(result['response'], dict):
-                        print(f"🏷️  Primary Category: {result['response'].get('primary', 'N/A')}")
-                        print(f"🏷️  Secondary Category: {result['response'].get('secondary', 'N/A')}")
-                        if 'parsing_method' in result['response']:
-                            print(f"📝  Parsing Method: {result['response']['parsing_method']}")
-                    else:
-                        print(f"🏷️  Classification: {result['response']}")
-                    
-                    # Show metadata
-                    print(f"📊 Metadata:")
-                    print(f"   Model: {result['metadata']['model_used']}")
-                    print(f"   Finish Reason: {result['metadata']['finish_reason']}")
-                    print(f"   Timestamp: {result['metadata']['timestamp']}")
-                    
-                    # Show usage info
-                    if result['usage']:
-                        print(f"   Tokens Used: {result['usage']['total_tokens']}")
-                        
+                    OutputFormatter.print_classification_result(result)
+                    result_info['classification_successful'] = True
+                    result_info['classification_result'] = result
                 except (OpenAIError, RuntimeError) as e:
-                    print(f"❌ Classification failed: {e}")
-            else:
-                print(f"❌ Validation failed: {validation_result['error_message']}")
+                    OutputFormatter.print_error("Classification Failed", str(e))
+                    result_info['classification_successful'] = False
+                    result_info['error'] = str(e)
+            
+            results.append(result_info)
+        
+        # Print summary
+        OutputFormatter.print_summary(results)
         
     except ValueError as e:
-        print(f"❌ Configuration Error: {e}")
+        suggestions = []
         if "API key" in str(e):
-            print("💡 Please add your API key to the .env file:")
-            print("   OPENAI_API_KEY=your_api_key_here")
+            suggestions = [
+                "Add your API key to the .env file",
+                "Format: OPENAI_API_KEY=your_api_key_here",
+                "Make sure the API key starts with 'sk-'"
+            ]
         elif "Query" in str(e):
-            print("💡 Please provide a valid query string")
+            suggestions = [
+                "Provide a valid query string",
+                "Ensure the query is not empty",
+                "Make sure the query is meaningful"
+            ]
+        
+        OutputFormatter.print_error("Configuration Error", str(e), suggestions)
+        
     except OpenAIError as e:
-        print(f"❌ OpenAI API Error: {e}")
+        suggestions = []
         if "quota" in str(e).lower():
-            print("💡 Please check your OpenAI billing and plan details")
+            suggestions = [
+                "Check your OpenAI billing and plan details",
+                "Add payment method to your account",
+                "Verify your account has sufficient credits"
+            ]
         elif "rate limit" in str(e).lower():
-            print("💡 Please wait a moment and try again")
+            suggestions = [
+                "Wait a moment and try again",
+                "Reduce the frequency of requests",
+                "Check your API usage limits"
+            ]
+        
+        OutputFormatter.print_error("OpenAI API Error", str(e), suggestions)
+        
     except RuntimeError as e:
-        print(f"❌ Runtime Error: {e}")
-        print("💡 Please check your internet connection and try again")
+        OutputFormatter.print_error("Runtime Error", str(e), [
+            "Check your internet connection",
+            "Verify the API endpoint is accessible",
+            "Try again in a few moments"
+        ])
+        
     except Exception as e:
-        print(f"❌ Unexpected Error: {e}")
-        print("💡 Please contact support if this error persists")
+        OutputFormatter.print_error("Unexpected Error", str(e), [
+            "Contact support if this error persists",
+            "Check the system logs for more details",
+            "Try restarting the application"
+        ])
 
 if __name__ == "__main__":
     main() 
